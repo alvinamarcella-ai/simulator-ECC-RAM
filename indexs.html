@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>ECC RAM Simulator — Hamming(72,64) SEC-DED (Auto-write & Scrub)</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#ffffff; --accent:#2b6ef6; --mut:#6b7280;
+    --par:#ffd54f; --data:#7bd389; --err:#ff6b6b; --fix:#28a745; --info:#eef6ff;
+    --border:#e6e9ef;
+  }
+  *{box-sizing:border-box;font-family:Inter,system-ui,-apple-system,'Segoe UI',Roboto,Arial}
+  html,body{height:100%;margin:0;background:var(--bg);color:#0f1724;padding:18px}
+  .wrap{max-width:1200px;margin:0 auto}
+  header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
+  h1{margin:0;font-size:20px;color:var(--accent)}
+  .small{color:var(--mut);font-size:13px}
+  .grid{display:grid;grid-template-columns:1fr 420px;gap:14px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  input[type=text], input[type=number], select, textarea{
+    padding:8px;border-radius:8px;border:1px solid var(--border);background:#fff;color:#0b1220;
+  }
+  button{background:var(--accent);color:white;border:none;padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:700}
+  button.ghost{background:transparent;border:1px solid var(--border);color:var(--mut)}
+  .bits{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .bit{min-width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:8px;font-weight:700}
+  .bit.parity{background:var(--par);color:#1b1b1b;border:1px solid #f5d96b}
+  .bit.data{background:var(--data);color:#042206;border:1px solid #95dfab}
+  .bit.error{background:var(--err);color:#fff;transform:translateY(-3px);border:1px solid #ff8b8b}
+  .bit.fixed{background:var(--fix);color:#fff;border:1px solid #3db25a}
+  .bit.highlight{outline:3px solid rgba(43,110,246,0.12);transform:scale(1.04)}
+  .explain{background:#fbfdff;border-radius:8px;padding:10px;border:1px solid #e6f0ff;margin-top:10px;color:#04315a;font-family:ui-monospace,monospace}
+  .log{background:#fff;padding:10px;border-radius:8px;border:1px solid var(--border);height:240px;overflow:auto;font-family:ui-monospace,monospace;color:#0b1220}
+  .footer{margin-top:12px;color:var(--mut);font-size:13px;text-align:center}
+  .row{display:flex;gap:8px;align-items:center}
+  @media(max-width:980px){.grid{grid-template-columns:1fr}}
+  .xor-line{height:4px;background:var(--accent);width:0;border-radius:4px;margin:6px 0;transition:width .45s ease}
+  .subtitle{font-weight:700;color:#08306b;margin-top:8px}
+  #conclusion code{display:inline-block;padding:6px 8px;background:#f1f5ff;border-radius:6px;border:1px solid #dfe9ff;font-family:ui-monospace,monospace;margin-top:6px}
+  .mem-table{width:100%;border-collapse:collapse;margin-top:8px}
+  .mem-table th,.mem-table td{border:1px solid var(--border);padding:6px;text-align:center;font-family:ui-monospace,monospace}
+  .btn-small{padding:6px 8px;border-radius:6px;font-size:13px}
+  /* ensure clickable */
+  *{pointer-events:auto !important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>ECC RAM Simulator — Hamming(72,64) SEC-DED</h1>
+    <div class="small"></div>
+  </header>
+
+  <div class="grid">
+    <!-- LEFT -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><strong>Pengaturan & Kontrol</strong></div>
+        <div class="small">Mode:
+          <select id="modeSelect" onchange="uiSetMode()" style="margin-left:6px">
+            <option value="SEC-DED">SEC-DED (default)</option>
+            <option value="SEC">SEC</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="margin-top:10px" class="controls">
+        <label class="small">Panjang bit data (fixed 64):</label>
+        <input id="bitLen" type="number" min="1" max="4096" value="64" style="width:110px" disabled />
+        <button onclick="uiRandom()">Random Generate</button>
+        <label class="small">atau masukkan bit manual (64 bit)</label>
+      </div>
+
+      <div style="margin-top:8px">
+        <textarea id="bitsInput" rows="2" placeholder="Masukkan 64 bit (0/1) atau pakai Random Generate" style="width:100%"></textarea>
+      </div>
+
+      <div style="margin-top:10px" class="controls">
+        <button onclick="uiEncode()">Encode (preview)</button>
+        <label style="display:flex;align-items:center;gap:6px;margin-left:8px"><input id="autoWriteChk" type="checkbox" /> Auto-Write</label>
+        <button onclick="uiInject1()" class="ghost">Inject 1 random (buffer)</button>
+        <button onclick="uiInject2()" class="ghost">Inject 2 random (buffer)</button>
+        <input id="kInject" type="number" placeholder="K" style="width:80px"/>
+        <button onclick="uiInjectK()" class="ghost">Inject K</button>
+        <input id="pInject" type="number" placeholder="Prob%" style="width:80px"/>
+        <button onclick="uiInjectP()" class="ghost">Inject by Prob</button>
+      </div>
+
+      <div style="margin-top:12px;display:flex;align-items:center;gap:12px">
+        <button onclick="uiDecode()" class="btn-small">Decode (Auto) – buffer</button>
+        <button onclick="uiStep()" class="ghost btn-small">Step-by-step</button>
+        <button onclick="uiClear()" class="ghost btn-small">Clear</button>
+        <div style="flex:1"></div>
+        <div class="small">p: <span id="pCount">7</span> | code len: <span id="nCount">72</span></div>
+      </div>
+
+      <div style="margin-top:14px">
+        <div class="subtitle">Visual Codeword (pos 1..72)</div>
+        <div id="bitsArea" class="bits" aria-live="polite" style="margin-top:8px"></div>
+        <div class="xor-line" id="xorLine" style="width:0"></div>
+        <div id="explain" class="explain"><strong>Perhitungan parity</strong><br>Hamming(72,64): parity pos = 1,2,4,8,16,32,64; overall parity pos = 72.</div>
+
+        <div style="margin-top:10px" class="controls">
+          <input id="addrInput" type="text" placeholder="address (mis. 0 atau slotA)" style="width:160px" />
+          <button onclick="uiWriteToRam()" class="ghost btn-small">Write to RAM (encode-on-write)</button>
+        </div>
+
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+          <label class="small">Scrub interval (detik):</label>
+          <input id="scrubInterval" type="number" value="10" style="width:80px" />
+          <button onclick="startScrubbing()" class="btn-small">Start Scrub</button>
+          <button onclick="stopScrubbing()" class="ghost btn-small">Stop Scrub</button>
+          <div class="small" style="margin-left:8px">Status: <span id="scrubStatus">stopped</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT -->
+    <div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><strong>Memory (RAM) — Hamming(72,64)</strong></div>
+          <div style="display:flex;gap:6px">
+            <button onclick="uiExportRam()" class="ghost btn-small">Export</button>
+            <button onclick="uiClearRam()" class="ghost btn-small">Clear Mem</button>
+          </div>
+        </div>
+
+        <div style="margin-top:8px;max-height:200px;overflow:auto">
+          <table class="mem-table" id="memTable">
+            <thead><tr><th>Addr</th><th>Data(64)</th><th>ECC(8)</th><th>p</th><th>CE</th><th>UE</th><th>Last</th><th>Actions</th></tr></thead>
+            <tbody id="memTbody"></tbody>
+          </table>
+        </div>
+
+        <div style="margin-top:8px" class="small">Write to RAM otomatis melakukan encode (data→ECC) dan menyimpan terpisah. Scrubber memperbaiki single-bit pada background.</div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><strong>Log langkah</strong></div>
+          <div class="small">Terbaru di atas</div>
+        </div>
+        <div id="logArea" class="log" style="margin-top:8px"></div>
+        <div style="margin-top:10px">
+          <strong>Kesimpulan Akhir</strong>
+          <div id="conclusion" class="explain">Belum ada hasil.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">Scrubber dan Auto-Write siap. Gunakan dengan hati-hati pada data percobaan.</div>
+</div>
+
+<script>
+/* ========== Konfigurasi & State ========== */
+function el(id){ return document.getElementById(id); }
+function log(msg){ el('logArea').prepend(`[${new Date().toLocaleTimeString()}] ${msg}\n`); }
+function appendExplain(html){ el('explain').innerHTML += html + '<br>'; }
+function clearExplain(){ el('explain').innerHTML = ''; }
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+function isPow2(n){ return n>0 && (n & (n-1))===0; }
+
+const DATA_WORD_LEN = 64;
+const FIXED_P = 7; // parity bits
+const TOTAL_WITHOUT_GLOBAL = DATA_WORD_LEN + FIXED_P; // 71
+const TOTAL_LEN = TOTAL_WITHOUT_GLOBAL + 1; // 72
+
+let CODE = null;
+let pCount = FIXED_P;
+let mode = 'SEC-DED';
+let stepState = null;
+const RAM = {};
+
+// scrubbing timer
+let scrubTimer = null;
+
+/* init UI counts */
+el('pCount').textContent = FIXED_P;
+el('nCount').textContent = TOTAL_LEN;
+el('scrubStatus').textContent = 'stopped';
+
+/* ========== Helper bit functions ========== */
+function bitsFromString(s, len){
+  const arr = [];
+  for(let i=0;i<len;i++) arr.push(s[i] === '1' ? '1' : '0');
+  return arr;
+}
+function buildCodewordFromDataBits(dataBits, fillParityZeros=true){
+  const baseN = TOTAL_WITHOUT_GLOBAL;
+  const total = TOTAL_LEN;
+  let code = new Array(total + 1).fill(0);
+  let di = 0;
+  for(let i=1;i<=baseN;i++){
+    if(isPow2(i)){
+      code[i] = 0;
+    } else {
+      code[i] = Number(dataBits[di]); di++;
+    }
+  }
+  if(fillParityZeros) code[total] = 0;
+  return code;
+}
+function extractDataFromCode(code){
+  const data = [];
+  for(let i=1;i<=TOTAL_WITHOUT_GLOBAL;i++){
+    if(!isPow2(i)) data.push(String(code[i]));
+  }
+  if(data.length !== DATA_WORD_LEN){
+    while(data.length < DATA_WORD_LEN) data.push('0');
+    if(data.length > DATA_WORD_LEN) data.splice(DATA_WORD_LEN);
+  }
+  return data;
+}
+function extractEccFromCode(code){
+  const ecc = [];
+  for(let i=0;i<pCount;i++){ const pos = 1<<i; ecc.push(String(code[pos])); }
+  ecc.push(String(code[TOTAL_LEN]));
+  return ecc;
+}
+function buildCodeFromDataAndEcc(dataBits, eccBits){
+  const code = buildCodewordFromDataBits(dataBits, false);
+  for(let i=0;i<pCount;i++){ const pos = 1<<i; code[pos] = Number(eccBits[i]); }
+  code[TOTAL_LEN] = Number(eccBits[7]);
+  return code;
+}
+function computeFullCodeword(dataBits){
+  const code = buildCodewordFromDataBits(dataBits, false);
+  const baseN = TOTAL_WITHOUT_GLOBAL;
+  for(let i=0;i<pCount;i++){
+    const pos = 1<<i; let xor = 0;
+    for(let j=1;j<=baseN;j++) if(j & pos) xor ^= Number(code[j]);
+    code[pos] = xor;
+  }
+  let xorAll = 0;
+  for(let j=1;j<=baseN;j++) xorAll ^= Number(code[j]);
+  code[TOTAL_LEN] = xorAll;
+  return code;
+}
+function computeSyndromeAndOverall(code){
+  const baseN = TOTAL_WITHOUT_GLOBAL;
+  let syndrome = 0;
+  for(let i=0;i<pCount;i++){
+    const pos = 1<<i; let xor = 0;
+    for(let j=1;j<=baseN;j++) if(j & pos) xor ^= Number(code[j]);
+    if(xor) syndrome += pos;
+  }
+  let overall = 0;
+  for(let j=1;j<=TOTAL_LEN;j++) overall ^= Number(code[j]);
+  return { syndrome: syndrome, overall: overall };
+}
+
+/* ========== Render ========== */
+function renderCode(code, highlight=null){
+  el('bitsArea').innerHTML = '';
+  if(!code) return;
+  for(let i=1;i<=TOTAL_LEN;i++){
+    const div = document.createElement('div');
+    const cls = (isPow2(i) || i===TOTAL_LEN) ? 'parity' : 'data';
+    div.className = 'bit ' + cls;
+    div.textContent = code[i];
+    if(Array.isArray(highlight) && highlight.indexOf(i) !== -1) div.classList.add('highlight');
+    if(Number.isInteger(highlight) && highlight === i) div.classList.add('error');
+    if(Number.isInteger(highlight) && highlight === -i) div.classList.add('fixed');
+    (function(pos, elDiv){
+      elDiv.onclick = function(){
+        code[pos] ^= 1;
+        CODE = code.slice();
+        renderCode(CODE);
+        appendExplain(`Manual flip pada posisi ${pos}.`);
+        log(`Manual flip pos ${pos}`);
+      };
+    })(i, div);
+    el('bitsArea').appendChild(div);
+  }
+  el('pCount').textContent = pCount;
+  el('nCount').textContent = TOTAL_LEN;
+}
+function setConclusion(html){
+  let out = html || '';
+  if(CODE && Array.isArray(CODE) && CODE.length > 1){
+    const cw = CODE.slice(1).join('');
+    out += `<br><br><strong>Hasil akhir codeword (buffer):</strong><br><code>${cw}</code>`;
+  }
+  el('conclusion').innerHTML = out;
+}
+
+/* ========== UI Actions ========== */
+function uiSetMode(){ mode = el('modeSelect').value; log('Mode diubah: ' + mode); }
+function uiRandom(){ let out=''; for(let i=0;i<DATA_WORD_LEN;i++) out += (Math.random()<0.5?'0':'1'); el('bitsInput').value = out; log('Random generated 64 bits'); }
+async function uiEncode(){
+  let s = el('bitsInput').value.trim().replace(/\s+/g,'');
+  if(!/^[01]*$/.test(s)) return alert('Input harus hanya berisi 0 atau 1.');
+  if(s.length === 0) return alert('Masukkan 64 bit atau gunakan Random Generate.');
+  if(s.length !== DATA_WORD_LEN){
+    const choice = confirm(`Input panjang ${s.length} bukan ${DATA_WORD_LEN}. OK untuk PAD (0), Cancel untuk TRUNCATE.`);
+    if(choice){ while(s.length < DATA_WORD_LEN) s += '0'; } else { s = s.slice(0, DATA_WORD_LEN); }
+  }
+  const dataBits = bitsFromString(s, DATA_WORD_LEN);
+  const code = computeFullCodeword(dataBits);
+  CODE = code.slice();
+  renderCode(CODE);
+  setConclusion('Preview encode selesai.');
+  log('Preview encode done (buffer prepared).');
+  // Auto-Write if enabled and address present
+  try{
+    const autoWrite = el('autoWriteChk').checked;
+    const addr = el('addrInput').value.trim();
+    if(autoWrite && addr){
+      uiWriteToRam(); // encode-on-write performed inside
+      log('Auto-Write triggered after Encode.');
+    }
+  } catch(e){ /* ignore */ }
+}
+function uiInject1(){ if(!CODE) return alert('Encode dulu (preview) sebelum inject buffer.'); const pos = Math.floor(Math.random()*TOTAL_LEN)+1; CODE[pos]^=1; renderCode(CODE,pos); appendExplain(`Injected single-bit error pada posisi ${pos} (buffer).`); log(`Injected buffer pos ${pos}`); }
+function uiInject2(){ if(!CODE) return alert('Encode dulu (preview) sebelum inject buffer.'); let a=Math.floor(Math.random()*TOTAL_LEN)+1,b; do{b=Math.floor(Math.random()*TOTAL_LEN)+1;}while(b===a); CODE[a]^=1; CODE[b]^=1; renderCode(CODE,[a,b]); appendExplain(`Injected double-bit error pada posisi ${a} & ${b} (buffer).`); log(`Injected buffer pos ${a}, ${b}`); }
+function uiInjectK(){ if(!CODE) return alert('Encode dulu (preview) sebelum inject buffer.'); const k = Number(el('kInject').value)||0; if(k<=0) return alert('Isi K>0'); let cnt=0; for(let t=0;t<k;t++){ const pos=Math.floor(Math.random()*TOTAL_LEN)+1; CODE[pos]^=1; cnt++; } renderCode(CODE); appendExplain(`Injected ${cnt} random flips (buffer).`); log(`Injected K=${cnt} buffer`); }
+function uiInjectP(){ if(!CODE) return alert('Encode dulu (preview) sebelum inject buffer.'); const pct=Number(el('pInject').value)||0; if(pct<=0) return alert('Prob>0'); let cnt=0; for(let i=1;i<=TOTAL_LEN;i++){ if(Math.random()<pct/100){ CODE[i]^=1; cnt++; } } renderCode(CODE); appendExplain(`Injected by prob ${pct}% → total flips ${cnt} (buffer).`); log(`Injected prob ${pct}% buffer -> ${cnt}`); }
+
+async function uiDecode(){ if(!CODE) return alert('Belum ada buffer (Encode dulu).'); await decodeBufferAuto(); }
+
+async function decodeBufferAuto(){
+  const code = CODE.slice();
+  appendExplain('<b>Mulai decoding buffer...</b>');
+  log('Decode buffer start');
+  const { syndrome, overall } = computeSyndromeAndOverall(code);
+  if(mode==='SEC'){
+    if(syndrome===0){ appendExplain('Syndrome=0 → no error (SEC).'); setConclusion('Tidak ditemukan kesalahan (buffer).'); renderCode(code); CODE=code.slice(); log('Decode SEC buffer: no error'); return; }
+    appendExplain(`Syndrome=${syndrome} → single-bit error. Koreksi buffer.`); renderCode(code,syndrome); await sleep(200); code[syndrome]^=1; CODE=code.slice(); renderCode(CODE,-syndrome); appendExplain(`Bit pos ${syndrome} dikoreksi (buffer).`); setConclusion(`Single-bit error diperbaiki di posisi ${syndrome} (buffer).`); log(`SEC corrected buffer pos ${syndrome}`); return;
+  } else {
+    if(syndrome===0 && overall===0){ appendExplain('Tidak ada error (buffer).'); setConclusion('Tidak ditemukan kesalahan (buffer).'); renderCode(code); CODE=code.slice(); log('SEC-DED buffer: no error'); return; }
+    if(syndrome===0 && overall===1){ const g=TOTAL_LEN; appendExplain('Syndrome=0 & overall=1 -> global parity corrupted.'); renderCode(code,g); await sleep(150); code[g]^=1; CODE=code.slice(); renderCode(CODE,-g); setConclusion('Global parity diperbaiki (buffer).'); log('SEC-DED buffer corrected global parity'); return; }
+    if(syndrome!==0 && overall===1){ appendExplain(`Syndrome=${syndrome} & overall=1 -> single-bit error. Koreksi buffer.`); renderCode(code,syndrome); await sleep(150); code[syndrome]^=1; CODE=code.slice(); renderCode(CODE,-syndrome); setConclusion(`Single-bit error diperbaiki (pos ${syndrome}) (buffer).`); log(`SEC-DED buffer corrected pos ${syndrome}`); return; }
+    if(syndrome!==0 && overall===0){ appendExplain(`Syndrome=${syndrome} & overall=0 -> double-bit error detected (buffer).`); renderCode(code); setConclusion(`Double-bit error terdeteksi (syndrome=${syndrome}). Tidak dapat dikoreksi (buffer).`); log(`SEC-DED buffer double-bit detected (syndrome ${syndrome})`); CODE=code.slice(); return; }
+  }
+}
+
+function uiStep(){ if(!CODE) return alert('Encode dulu (preview) sebelum step decode.'); if(!stepState) decodeStep(); else if(!stepState.done) decodeStep(); else applyStepCorrection(); }
+async function decodeStep(){ if(!CODE) return alert('Encode dulu'); if(!stepState || stepState.done){ stepState={i:0,syndrome:0,working:CODE.slice(),baseN:TOTAL_WITHOUT_GLOBAL,done:false}; appendExplain('Mulai step-by-step decode (buffer). Tekan Step lagi.'); log('Step decode init'); renderCode(stepState.working); return; } if(stepState.i < pCount){ const i=stepState.i; const pos=1<<i; const involved=[]; for(let j=1;j<=stepState.baseN;j++) if(j & pos) involved.push(j); renderCode(stepState.working,involved); appendExplain(`Step ${i+1}/${pCount}: hitung s untuk mask pos ${pos}`); await sleep(300); let xor=0; for(let k=0;k<involved.length;k++) xor ^= Number(stepState.working[involved[k]]); appendExplain(`→ s${pos} = ${xor}`); if(xor) stepState.syndrome += pos; log(`Step parity pos ${pos}: s=${xor}`); stepState.i++; return; } const syndrome=stepState.syndrome; let overall=0; for(let j=1;j<=TOTAL_LEN;j++) overall ^= Number(stepState.working[j]); appendExplain(`Finish parity: syndrome=${syndrome}, overall=${overall}`); stepState.done=true; appendExplain('Tekan Step lagi untuk menerapkan koreksi jika memungkinkan.'); return; }
+async function applyStepCorrection(){ if(!stepState || !stepState.done) return; const syndrome = stepState.syndrome; const working = stepState.working; if(mode==='SEC'){ if(syndrome===0){ setConclusion('Tidak ada error.'); stepState=null; return; } working[syndrome]^=1; CODE=working.slice(); renderCode(CODE,-syndrome); setConclusion(`Single-bit diperbaiki di pos ${syndrome}.`); stepState=null; log('Step corrected SEC'); return; } else { let overall=0; for(let j=1;j<=TOTAL_LEN;j++) overall ^= Number(working[j]); if(syndrome===0 && overall===0){ setConclusion('Tidak ada error.'); stepState=null; return; } if(syndrome===0 && overall===1){ working[TOTAL_LEN]^=1; CODE=working.slice(); renderCode(CODE,-TOTAL_LEN); setConclusion(`Global parity diperbaiki (pos ${TOTAL_LEN})`); stepState=null; log('Step corrected global'); return; } if(syndrome!==0 && overall===1){ working[syndrome]^=1; CODE=working.slice(); renderCode(CODE,-syndrome); setConclusion(`Single-bit diperbaiki (pos ${syndrome})`); stepState=null; log('Step corrected single'); return; } if(syndrome!==0 && overall===0){ setConclusion(`Double-bit terdeteksi (syndrome=${syndrome}). Tidak dapat dikoreksi.`); stepState=null; return; } } }
+
+/* ========== Write to RAM (encode-on-write) ========== */
+function uiWriteToRam(){
+  let s = el('bitsInput').value.trim().replace(/\s+/g,'');
+  if(!/^[01]*$/.test(s)) return alert('Input harus hanya berisi 0 atau 1.');
+  if(s.length === 0 && !CODE) return alert('Masukkan data 64 bit atau lakukan Encode preview dahulu.');
+  let dataBits;
+  if(CODE && CODE.length === TOTAL_LEN + 1){
+    dataBits = extractDataFromCode(CODE);
+  } else {
+    if(s.length !== DATA_WORD_LEN){
+      const choice = confirm(`Input panjang ${s.length} bukan ${DATA_WORD_LEN}. OK untuk PAD (0), Cancel untuk TRUNCATE.`);
+      if(choice){ while(s.length < DATA_WORD_LEN) s += '0'; } else { s = s.slice(0, DATA_WORD_LEN); }
+    }
+    dataBits = bitsFromString(s, DATA_WORD_LEN);
+  }
+  const addr = el('addrInput').value.trim();
+  if(!addr) return alert('Isi address sebelum Write.');
+  const code = computeFullCodeword(dataBits);
+  const ecc = extractEccFromCode(code);
+  RAM[addr] = { data: dataBits.slice(), ecc: ecc.slice(), p: pCount, mode: mode, meta: { correctedCount: 0, uncorrectableCount: 0, lastSeen: (new Date()).toISOString() } };
+  log(`WRITE -> addr='${addr}' stored (data64 + ecc8)`);
+  setConclusion(`Tersimpan ke RAM[${addr}] (encode-on-write).`);
+  renderRamTable();
+}
+
+/* ========== Read from RAM (decode-on-read) ========== */
+async function uiReadFromRam(addr){
+  const slot = RAM[addr];
+  if(!slot){ alert('Address kosong'); return; }
+  let code = buildCodeFromDataAndEcc(slot.data, slot.ecc);
+  CODE = code.slice();
+  renderCode(CODE);
+  appendExplain(`<b>Read dari RAM '${addr}' — decode-on-read dijalankan...</b>`);
+  log(`READ start addr='${addr}'`);
+  const { syndrome, overall } = computeSyndromeAndOverall(code);
+  if(mode === 'SEC-DED'){
+    if(syndrome===0 && overall===0){
+      appendExplain('No error on read.');
+      setConclusion('Baca RAM: tidak ada kesalahan.');
+      slot.meta.lastSeen = (new Date()).toISOString();
+      RAM[addr] = slot;
+      renderRamTable();
+      log(`READ addr=${addr}: no error`);
+      return;
+    }
+    if(syndrome===0 && overall===1){
+      appendExplain('Syndrome=0 & overall=1 -> global parity corrupted. Correcting ECC global bit.');
+      code[TOTAL_LEN] ^= 1;
+      slot.ecc[7] = String(code[TOTAL_LEN]);
+      slot.meta.correctedCount += 1;
+      slot.meta.lastSeen = (new Date()).toISOString();
+      RAM[addr] = slot;
+      CODE = code.slice();
+      renderCode(CODE, -TOTAL_LEN);
+      setConclusion(`Global parity diperbaiki pada addr ${addr}.`);
+      log(`READ addr=${addr}: corrected global parity`);
+      renderRamTable();
+      return;
+    }
+    if(syndrome!==0 && overall===1){
+      appendExplain(`Syndrome=${syndrome} & overall=1 -> single-bit error di pos ${syndrome}. Koreksi dan update RAM.`);
+      code[syndrome] ^= 1;
+      const newData = extractDataFromCode(code);
+      const newEcc = extractEccFromCode(code);
+      slot.data = newData.slice();
+      slot.ecc = newEcc.slice();
+      slot.meta.correctedCount += 1;
+      slot.meta.lastSeen = (new Date()).toISOString();
+      RAM[addr] = slot;
+      CODE = code.slice();
+      renderCode(CODE, -syndrome);
+      setConclusion(`Single-bit error dikoreksi pada addr ${addr}, posisi ${syndrome}.`);
+      log(`READ addr=${addr}: corrected single-bit pos ${syndrome}`);
+      renderRamTable();
+      return;
+    }
+    if(syndrome!==0 && overall===0){
+      appendExplain(`Syndrome=${syndrome} & overall=0 -> double-bit error terdeteksi pada addr ${addr}. Tidak dapat dikoreksi.`);
+      slot.meta.uncorrectableCount += 1;
+      slot.meta.lastSeen = (new Date()).toISOString();
+      RAM[addr] = slot;
+      CODE = code.slice();
+      renderCode(CODE);
+      setConclusion(`Double-bit error terdeteksi pada addr ${addr} (syndrome=${syndrome}). Tidak dapat dikoreksi.`);
+      log(`READ addr=${addr}: UNCORRECTABLE (syndrome ${syndrome})`);
+      renderRamTable();
+      return;
+    }
+  } else {
+    // SEC mode
+    if(syndrome===0){
+      appendExplain('No error (SEC).');
+      setConclusion('Tidak ada kesalahan (SEC).');
+      slot.meta.lastSeen = (new Date()).toISOString();
+      RAM[addr] = slot;
+      renderRamTable();
+      log(`READ addr=${addr}: no error (SEC)`);
+      return;
+    } else {
+      code[syndrome] ^= 1;
+      const newData = extractDataFromCode(code);
+      const newEcc = extractEccFromCode(code);
+      slot.data = newData.slice();
+      slot.ecc = newEcc.slice();
+      slot.meta.correctedCount += 1;
+      slot.meta.lastSeen = (new Date()).toISOString();
+      RAM[addr] = slot;
+      CODE = code.slice();
+      renderCode(CODE, -syndrome);
+      setConclusion(`Single-bit error dikoreksi pada addr ${addr}, posisi ${syndrome}.`);
+      log(`READ addr=${addr}: corrected single-bit pos ${syndrome} (SEC)`);
+      renderRamTable();
+      return;
+    }
+  }
+}
+
+/* wrapper to read from address field */
+function uiReadFromAddrField(){ const addr = el('addrInput').value.trim(); if(!addr) return alert('Isi address untuk Read.'); uiReadFromRam(addr); }
+
+/* ========== Inject into stored RAM (simulate faults in storage) ========== */
+function uiInjectToRam(addr,k){
+  const slot = RAM[addr];
+  if(!slot){ alert('Address kosong'); return; }
+  let cnt = 0;
+  for(let t=0;t<k;t++){
+    const pos = Math.floor(Math.random()*DATA_WORD_LEN);
+    slot.data[pos] = slot.data[pos] === '1' ? '0' : '1';
+    cnt++;
+  }
+  slot.meta.lastSeen = (new Date()).toISOString();
+  RAM[addr] = slot;
+  renderRamTable();
+  log(`Injected ${cnt} flip(s) into data at addr=${addr}`);
+  setConclusion(`Injected ${cnt} flip(s) ke RAM[${addr}] (data).`);
+}
+
+/* ========== RAM table rendering & utils ========== */
+function renderRamTable(){
+  const tbody = el('memTbody'); tbody.innerHTML = '';
+  const keys = Object.keys(RAM).sort();
+  for(let i=0;i<keys.length;i++){
+    const addr = keys[i];
+    const slot = RAM[addr];
+    const dataStr = slot.data.join('');
+    const eccStr = slot.ecc.join('');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${addr}</td>
+      <td style="font-family:ui-monospace,monospace;max-width:240px;overflow:auto">${dataStr}</td>
+      <td style="font-family:ui-monospace,monospace">${eccStr}</td>
+      <td>${slot.p}</td>
+      <td>${slot.meta.correctedCount}</td>
+      <td>${slot.meta.uncorrectableCount}</td>
+      <td>${slot.meta.lastSeen ? slot.meta.lastSeen.split('T').join(' ').slice(0,19) : '-'}</td>
+      <td>
+        <button class="btn-small ghost" onclick="uiReadFromRam('${addr}')">Read</button>
+        <button class="btn-small ghost" onclick="uiInjectToRam('${addr}',1)">Inject1</button>
+      </td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+/* ========== Export / Clear RAM ========== */
+function uiExportRam(){ const data = JSON.stringify(RAM, null, 2); const blob = new Blob([data], {type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='ram_hamming72_64.json'; a.click(); URL.revokeObjectURL(a.href); log('RAM exported'); }
+function uiClearRam(){ const keys = Object.keys(RAM); for(let i=0;i<keys.length;i++) delete RAM[keys[i]]; renderRamTable(); log('RAM cleared'); setConclusion('RAM dikosongkan.'); }
+
+/* ========== Scrubbing (background) ========== */
+function startScrubbing(){
+  const sec = Number(el('scrubInterval').value) || 10;
+  if(scrubTimer) clearInterval(scrubTimer);
+  scrubTimer = setInterval(async () => {
+    await runScrubPass();
+  }, sec*1000);
+  el('scrubStatus').textContent = 'running ('+sec+'s)';
+  log('Scrubber started, interval ' + sec + 's');
+}
+function stopScrubbing(){
+  if(scrubTimer){ clearInterval(scrubTimer); scrubTimer = null; el('scrubStatus').textContent = 'stopped'; log('Scrubber stopped'); }
+}
+async function runScrubPass(){
+  const keys = Object.keys(RAM);
+  if(keys.length === 0) return;
+  log('Scrub pass start: checking ' + keys.length + ' entries');
+  for(let i=0;i<keys.length;i++){
+    const addr = keys[i];
+    // call read which will attempt correction and update counters
+    await uiReadFromRam(addr);
+    // small pause to avoid UI lock
+    await sleep(50);
+  }
+  log('Scrub pass done');
+}
+
+/* ========== Init ========== */
+renderRamTable();
+setConclusion('Ready. Masukkan data 64-bit lalu Encode / Write. Aktifkan Auto-Write jika mau menulis otomatis. Start Scrub untuk background repair.');
+</script>
+</body>
+</html>
